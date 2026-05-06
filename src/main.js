@@ -82,8 +82,27 @@ function selectObject(id) {
     document.getElementById(`card-${id}`)?.classList.add('selected');
     document.getElementById(`bbox-${id}`)?.classList.add('selected');
     btnActionPrimary.disabled = false;
+
+    // Show green mask overlay for the selected object
+    const obj = state.detectedObjects.find(o => o.id === id);
+    if (obj && obj.cutout_b64 && !drawMode) {
+      // Fetch the full-image mask from backend to show proper overlay
+      if (obj.mask_id) {
+        fetch(`${API_URL}/temp/${obj.mask_id}`)
+          .then(r => r.blob())
+          .then(blob => {
+            const url = URL.createObjectURL(blob);
+            resizeSelCanvas();
+            showMaskOverlay(url);
+            URL.revokeObjectURL(url);
+          })
+          .catch(() => {}); // silently fail — overlay is cosmetic
+      }
+    }
   } else {
     btnActionPrimary.disabled = true;
+    // Clear the overlay when nothing is selected
+    if (!drawMode) selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
   }
 }
 
@@ -234,7 +253,9 @@ btnActionPrimary.addEventListener('click', async () => {
 
     document.getElementById('loading-removal').classList.remove('hidden');
     optionsContainer.innerHTML = '';
-    btnActionPrimary.innerText = 'Removing…';
+    btnActionPrimary.innerText = 'Removing...';
+    // Clear any selection overlay so the user can see the inpainted result clearly
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
 
     try {
       const useAi = document.getElementById('checkbox-use-ai').checked;
@@ -256,11 +277,16 @@ btnActionPrimary.addEventListener('click', async () => {
         div.className = 'option-card';
         div.innerHTML = `<img src="${b64}" alt="Option">`;
 
-        // Hover preview — always restore to committed src on leave
-        div.addEventListener('mouseenter', () => { imageWorkspace.src = b64; });
+        // Hover preview — restore to committed src on leave, clear overlay while hovering
+        div.addEventListener('mouseenter', () => {
+          imageWorkspace.src = b64;
+          selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+        });
         div.addEventListener('mouseleave', () => {
           if (!div.classList.contains('selected'))
             imageWorkspace.src = state.committedSrc;
+          // Restore overlay for the selected object if any
+          if (state.selectedObjectId) selectObject(state.selectedObjectId);
         });
 
         div.addEventListener('click', async () => {
@@ -425,22 +451,10 @@ function resetToUpload() {
   document.getElementById('step-upload').classList.add('active');
 }
 
-// ← Back button: smart back navigation
-// - In 3D mode → go back to removal step (same as btn-back-to-removal)
-// - In removal mode → go all the way back to upload
-document.getElementById('btn-start-over').addEventListener('click', () => {
-  if (state.mode === '3d') {
-    // Same as clicking "← Back to Removal" in the 3D sidebar
-    document.getElementById('btn-back-to-removal').click();
-  } else {
-    resetToUpload();
-  }
-});
-
 // ─────────────────────────────────────────────────────────
-//  Back to Removal (step 2 → step 1) — sidebar button
+//  Shared: return from 3D mode → Removal mode
 // ─────────────────────────────────────────────────────────
-document.getElementById('btn-back-to-removal').addEventListener('click', () => {
+function goBackToRemoval() {
   state.mode = 'remove';
 
   document.getElementById('final-state')?.classList.add('hidden');
@@ -461,6 +475,17 @@ document.getElementById('btn-back-to-removal').addEventListener('click', () => {
   btnActionPrimary.innerText = 'Remove Selected Object';
   btnActionPrimary.disabled  = true;
   selectObject(null);
+}
+
+// ← Back button: smart back navigation
+// - In 3D mode   → goBackToRemoval()
+// - In removal mode → go all the way back to upload
+document.getElementById('btn-start-over').addEventListener('click', () => {
+  if (state.mode === '3d') {
+    goBackToRemoval();
+  } else {
+    resetToUpload();
+  }
 });
 
 // ─────────────────────────────────────────────────────────
@@ -728,62 +753,60 @@ btnDrawSelect.addEventListener('click', () => {
   }
 });
 
-// Commit stroke on mouseup
+// ── Drawing: click once to START a stroke, click again to COMMIT it ───────
+// Window-level mousemove captures points even when cursor is outside canvas.
 function makePoint(e) {
   const cr = selCanvas.getBoundingClientRect();
   const ir = imageWorkspace.getBoundingClientRect();
   return {
     x:  (e.clientX - cr.left) / cr.width  * selCanvas.width,
     y:  (e.clientY - cr.top)  / cr.height * selCanvas.height,
-    // Allow coords outside [0,1] — backend will clamp to image bounds
+    // Allow coords outside [0,1] — backend clamps to image bounds
     fx: (e.clientX - ir.left) / ir.width,
     fy: (e.clientY - ir.top)  / ir.height,
   };
 }
-selCanvas.addEventListener('mousedown', (e) => {
+
+selCanvas.addEventListener('click', (e) => {
   if (!drawMode || e.button !== 0) return;
-  isDrawing     = true;
-  currentStroke = [makePoint(e)];
+  e.stopPropagation();
+  if (!isDrawing) {
+    // First click → start new stroke
+    isDrawing     = true;
+    currentStroke = [makePoint(e)];
+  } else {
+    // Second click → commit stroke
+    currentStroke.push(makePoint(e));
+    if (currentStroke.length >= 3) {
+      if (drawSubtract) subtractStrokes.push(currentStroke);
+      else              addStrokes.push(currentStroke);
+    }
+    isDrawing     = false;
+    currentStroke = [];
+    redrawCanvas();
+  }
 });
-selCanvas.addEventListener('mousemove', (e) => {
+
+// Track pointer globally while a stroke is active
+window.addEventListener('mousemove', (e) => {
   if (!isDrawing || !drawMode) return;
   currentStroke.push(makePoint(e));
   redrawCanvas();
 });
-selCanvas.addEventListener('mouseup', (e) => {
-  if (!isDrawing) return;
-  isDrawing = false;
-  if (currentStroke.length >= 3) {
-    if (drawSubtract) {
-      subtractStrokes.push(currentStroke);
-    } else {
-      addStrokes.push(currentStroke);
-    }
-  }
-  currentStroke = [];
-  redrawCanvas();
-});
-selCanvas.addEventListener('mouseleave', (e) => {
-  // Commit partial stroke if mouse leaves
-  if (isDrawing && currentStroke.length >= 3) {
-    if (drawSubtract) subtractStrokes.push(currentStroke);
-    else addStrokes.push(currentStroke);
-  }
-  isDrawing = false;
-  currentStroke = [];
-  redrawCanvas();
-});
-// Right-click: undo last committed stroke
+
+// Right-click: undo last committed stroke (or cancel in-progress)
 selCanvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  if (drawSubtract) subtractStrokes.pop();
-  else addStrokes.pop();
-  redrawCanvas();
+  if (isDrawing) {
+    // Cancel current stroke
+    isDrawing     = false;
+    currentStroke = [];
+    redrawCanvas();
+  } else {
+    if (drawSubtract) subtractStrokes.pop();
+    else              addStrokes.pop();
+    redrawCanvas();
+  }
 });
 
-// Adjust brush size with scroll in draw mode (doesn't zoom)
-selCanvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  brushRadius = Math.max(4, Math.min(80, brushRadius + (e.deltaY < 0 ? 2 : -2)));
-}, { passive: false });
+// Scroll on the canvas zooms normally — no stopPropagation.

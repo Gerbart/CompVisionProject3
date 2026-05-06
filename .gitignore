@@ -22,3 +22,27 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python virtual environments (very large — PyTorch DLLs exceed GitHub 100MB limit)
+dml_env/
+venv/
+.venv/
+env/
+
+# Generated outputs (large binary files)
+outputs/
+temp/*.png
+temp/*.glb
+temp/*.obj
+
+# ML model cache
+*.ckpt
+*.safetensors
+*.bin
+__pycache__/
+*.pyc
+*.pyo
+.cache/
+
+# Pipeline flowchart (regenerate with generate_flowchart.py)
+pipeline_flowchart.png
