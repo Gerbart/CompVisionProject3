@@ -83,29 +83,54 @@ function selectObject(id) {
     document.getElementById(`bbox-${id}`)?.classList.add('selected');
     btnActionPrimary.disabled = false;
 
-    // Show green mask overlay for the selected object
-    const obj = state.detectedObjects.find(o => o.id === id);
-    if (obj && obj.cutout_b64 && !drawMode) {
-      // Fetch the full-image mask from backend to show proper overlay
-      if (obj.mask_id) {
-        fetch(`${API_URL}/temp/${obj.mask_id}`)
-          .then(r => r.blob())
-          .then(blob => {
-            const url = URL.createObjectURL(blob);
-            resizeSelCanvas();
-            showMaskOverlay(url, true);
-          })
-          .catch(() => {}); // silently fail — overlay is cosmetic
+    // Show green mask overlay for the selected object (only when NOT in draw mode,
+    // because draw mode manages the canvas itself via redrawCanvas).
+    if (!drawMode) {
+      const obj = state.detectedObjects.find(o => o.id === id);
+      if (obj?.mask_id) {
+        // Store mask URL on baseMaskImg so subsequent resizes can redraw
+        const img = new window.Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          resizeSelCanvas();
+          baseMaskImg = img;   // keep for future redraws (e.g. on resize)
+          _paintMaskOverlay(img);
+        };
+        img.src = `${API_URL}/temp/${obj.mask_id}`;
+      } else {
+        selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
       }
     }
-    // Update draw button text based on selection state
+
     btnDrawSelect.innerText = '✏️ Edit Selection';
   } else {
     btnActionPrimary.disabled = true;
     btnDrawSelect.innerText = '✏️ Draw Selection';
-    // Clear the overlay when nothing is selected
-    if (!drawMode) selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    if (!drawMode) {
+      baseMaskImg = null;
+      selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    }
   }
+}
+
+/** Paints an HTMLImageElement as a green-tinted mask onto selCanvas. */
+function _paintMaskOverlay(img) {
+  const offscreen  = document.createElement('canvas');
+  offscreen.width  = selCanvas.width;
+  offscreen.height = selCanvas.height;
+  const offCtx = offscreen.getContext('2d');
+  offCtx.drawImage(img, 0, 0, selCanvas.width, selCanvas.height);
+  const imgData = offCtx.getImageData(0, 0, selCanvas.width, selCanvas.height);
+  const d = imgData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i] > 128) {
+      d[i] = 16; d[i+1] = 185; d[i+2] = 129; d[i+3] = 140;
+    } else {
+      d[i+3] = 0;
+    }
+  }
+  selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+  selCtx.putImageData(imgData, 0, 0);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -549,23 +574,11 @@ function animateAnts() {
 function redrawCanvas() {
   selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
 
-  // If editing an existing mask, draw it first
-  if (baseMaskImg && editingBaseMaskId) {
-    const offscreen  = document.createElement('canvas');
-    offscreen.width  = selCanvas.width;
-    offscreen.height = selCanvas.height;
-    const offCtx = offscreen.getContext('2d');
-    offCtx.drawImage(baseMaskImg, 0, 0, selCanvas.width, selCanvas.height);
-    const imgData = offCtx.getImageData(0, 0, selCanvas.width, selCanvas.height);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i] > 128) {
-        d[i] = 16; d[i+1] = 185; d[i+2] = 129; d[i+3] = 140; // green tint
-      } else {
-        d[i+3] = 0; // transparent
-      }
-    }
-    selCtx.putImageData(imgData, 0, 0);
+  // If editing an existing mask, draw it as the base layer first
+  if (baseMaskImg) {
+    _paintMaskOverlay(baseMaskImg);
+  } else {
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
   }
 
   // Draw all committed add strokes (green fill)
@@ -618,14 +631,16 @@ function redrawCanvas() {
 }
 
 function enterDrawMode() {
-  drawMode      = true;
-  addStrokes    = [];
+  drawMode        = true;
+  addStrokes      = [];
   subtractStrokes = [];
-  currentStroke = [];
-  drawSubtract  = false;
-  
-  editingBaseMaskId = state.selectedObjectId ? state.detectedObjects.find(o => o.id === state.selectedObjectId)?.mask_id : null;
-  smartMaskId   = editingBaseMaskId;
+  currentStroke   = [];
+  drawSubtract    = false;
+
+  // If an object is selected, edit its existing mask as the base layer
+  const selectedObj = state.detectedObjects.find(o => o.id === state.selectedObjectId);
+  editingBaseMaskId = selectedObj?.mask_id || null;
+  smartMaskId       = editingBaseMaskId;
 
   selCanvas.classList.add('drawing');
   btnDrawSelect.innerText = editingBaseMaskId ? '✅ Confirm Edits' : '✅ Confirm Selection';
@@ -633,63 +648,68 @@ function enterDrawMode() {
   btnDrawSelect.classList.remove('btn-secondary');
   bboxContainer.style.pointerEvents = 'none';
   document.querySelectorAll('.bounding-box').forEach(b => b.style.pointerEvents = 'none');
-  
-  if (!editingBaseMaskId) {
-    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
-    baseMaskImg = null;
-  } else {
-    // Load the base mask to draw continuously during stroke rendering
-    baseMaskImg = new window.Image();
-    baseMaskImg.onload = () => redrawCanvas();
-    baseMaskImg.src = `${API_URL}/temp/${editingBaseMaskId}`;
-  }
+
   // Show/style the subtract toggle
   document.getElementById('btn-subtract-mode').style.display = 'inline-flex';
   document.getElementById('btn-subtract-mode').classList.remove('active-subtract');
+
+  if (editingBaseMaskId) {
+    // Load base mask image — baseMaskImg is already set from selectObject, but
+    // reload to be safe (the canvas resolution may have changed).
+    const img = new window.Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => { baseMaskImg = img; redrawCanvas(); };
+    img.src = `${API_URL}/temp/${editingBaseMaskId}`;
+  } else {
+    baseMaskImg = null;
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+  }
+
   animateAnts();
 }
 
-// ─── Helper: blit a b64 mask onto selCanvas as green tint ──────────────────
+// ─── Helper: blit a mask onto selCanvas as green tint (used for static display) ──
+// maskB64 can be a data: URL or an object URL.
 function showMaskOverlay(maskB64, revokeUrl = false) {
-  const maskImg = new window.Image();
-  maskImg.onload = () => {
-    const offscreen  = document.createElement('canvas');
-    offscreen.width  = selCanvas.width;
-    offscreen.height = selCanvas.height;
-    const offCtx = offscreen.getContext('2d');
-    offCtx.drawImage(maskImg, 0, 0, selCanvas.width, selCanvas.height);
-    const imgData = offCtx.getImageData(0, 0, selCanvas.width, selCanvas.height);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      if (d[i] > 128) {
-        d[i] = 16; d[i+1] = 185; d[i+2] = 129; d[i+3] = 140; // green tint
-      } else {
-        d[i+3] = 0; // transparent
-      }
-    }
-    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
-    selCtx.putImageData(imgData, 0, 0);
-    
+  const img = new window.Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    resizeSelCanvas();
+    baseMaskImg = img;
+    _paintMaskOverlay(img);
     if (revokeUrl) URL.revokeObjectURL(maskB64);
   };
-  maskImg.src = maskB64;
+  img.src = maskB64;
 }
 
 async function confirmDrawMode() {
-  drawMode = false;
+  // Reset drawing canvas state immediately so strokes stop being drawn
+  drawMode  = false;
+  isDrawing = false;
+  currentStroke = [];
   selCanvas.classList.remove('drawing');
+  // Re-enable bounding boxes RIGHT AWAY so they never get stuck disabled
   bboxContainer.style.pointerEvents = '';
+  document.querySelectorAll('.bounding-box').forEach(b => b.style.pointerEvents = '');
   document.getElementById('btn-subtract-mode').style.display = 'none';
 
+  // If no strokes were drawn and we're not editing a base mask, just cancel cleanly
   if (addStrokes.length === 0 && subtractStrokes.length === 0 && !editingBaseMaskId) {
     exitDrawMode();
     return;
   }
 
-  btnDrawSelect.innerText  = '⏳ Processing…';
-  btnDrawSelect.disabled   = true;
+  // If editing a base mask with NO new strokes → just revert to the existing mask overlay
+  if (addStrokes.length === 0 && subtractStrokes.length === 0 && editingBaseMaskId) {
+    // Nothing changed — just restore the green overlay of the existing mask
+    if (baseMaskImg) _paintMaskOverlay(baseMaskImg);
+    exitDrawMode();
+    return;
+  }
 
-  // Send all strokes to backend
+  btnDrawSelect.innerText = '⏳ Processing…';
+  btnDrawSelect.disabled  = true;
+
   const addPts = addStrokes.map(s => s.map(p => [p.fx, p.fy]));
   const subPts = subtractStrokes.map(s => s.map(p => [p.fx, p.fy]));
 
@@ -698,14 +718,16 @@ async function confirmDrawMode() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        image_id:        state.imageId,
-        base_mask_id:    editingBaseMaskId || undefined,
-        add_strokes:     addPts,
+        image_id:         state.imageId,
+        base_mask_id:     editingBaseMaskId || undefined,
+        add_strokes:      addPts,
         subtract_strokes: subPts,
         // Legacy single-stroke field (first add stroke) for backward compat
         points: addPts[0] || [],
       })
     }).then(r => r.json());
+
+    if (data.status !== 'success') throw new Error(data.detail || 'Backend error');
 
     smartGcData   = { mask_id: data.mask_id,      mask_b64: data.mask_b64 };
     smartPolyData = { mask_id: data.poly_mask_id, mask_b64: data.poly_mask_b64 };
@@ -716,27 +738,31 @@ async function confirmDrawMode() {
     showMaskOverlay(active.mask_b64);
     document.getElementById('label-pure-selection').style.display = 'flex';
 
-    const smartObj = {
-      id:         'smart-sel',
-      label:      'Custom Selection',
-      box:        [0, 0, 1, 1],
-      mask_id:    smartMaskId,
+    // Update the object being edited in place, or add a new custom selection
+    const editingObjId = editingBaseMaskId ? state.selectedObjectId : 'smart-sel';
+    const existIdx = state.detectedObjects.findIndex(o => o.id === editingObjId);
+    const updatedObj = {
+      id:         editingObjId,
+      label:      existIdx >= 0 ? state.detectedObjects[existIdx].label : 'Custom Selection',
+      box:        data.box || (existIdx >= 0 ? state.detectedObjects[existIdx].box : [0, 0, 1, 1]),
+      mask_id:    active.mask_id,
       cutout_b64: active.mask_b64,
     };
-    state.detectedObjects = state.detectedObjects.filter(o => o.id !== 'smart-sel');
-    state.detectedObjects.unshift(smartObj);
+
+    if (existIdx >= 0) state.detectedObjects[existIdx] = updatedObj;
+    else               state.detectedObjects.unshift(updatedObj);
+
     renderObjects();
-    selectObject('smart-sel');
+    selectObject(updatedObj.id);
 
   } catch (err) {
-    console.error(err);
-    alert('Smart selection failed.');
+    console.error('Smart mask error:', err);
+    alert('Smart selection failed: ' + (err.message || err));
+    // Restore existing overlay if we had one
+    if (baseMaskImg) _paintMaskOverlay(baseMaskImg);
   }
 
-  btnDrawSelect.innerText  = '✏️ Draw Selection';
-  btnDrawSelect.classList.remove('btn-primary');
-  btnDrawSelect.classList.add('btn-secondary');
-  btnDrawSelect.disabled = false;
+  exitDrawMode();
 }
 
 // Live toggle: switch between GrabCut and pure polygon mask
@@ -755,19 +781,24 @@ document.getElementById('checkbox-pure-selection').addEventListener('change', (e
 });
 
 function exitDrawMode() {
-  drawMode      = false;
-  addStrokes    = [];
+  drawMode        = false;
+  isDrawing       = false;
+  addStrokes      = [];
   subtractStrokes = [];
-  currentStroke = [];
+  currentStroke   = [];
+  editingBaseMaskId = null;
   selCanvas.classList.remove('drawing');
-  selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
   bboxContainer.style.pointerEvents = '';
   document.querySelectorAll('.bounding-box').forEach(b => b.style.pointerEvents = '');
   document.getElementById('btn-subtract-mode').style.display = 'none';
-  btnDrawSelect.innerText  = '✏️ Draw Selection';
+  // Restore correct button label
+  btnDrawSelect.innerText = state.selectedObjectId ? '✏️ Edit Selection' : '✏️ Draw Selection';
   btnDrawSelect.classList.remove('btn-primary');
   btnDrawSelect.classList.add('btn-secondary');
   btnDrawSelect.disabled = false;
+  // baseMaskImg intentionally kept — _paintMaskOverlay will repaint the overlay
+  // that was set by selectObject / showMaskOverlay / confirmDrawMode.
+  if (baseMaskImg) _paintMaskOverlay(baseMaskImg);
 }
 
 // ── Subtract mode toggle button (injected into the toolbar) ─────────────────
