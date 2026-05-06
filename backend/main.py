@@ -44,6 +44,7 @@ class Generate3DRequest(BaseModel):
 
 class SmartMaskRequest(BaseModel):
     image_id: str
+    base_mask_id: Optional[str] = None
     points: list = []           # legacy single-stroke (first add stroke)
     add_strokes: list = []      # list of strokes, each stroke = [[x_frac, y_frac], ...]
     subtract_strokes: list = [] # strokes to subtract (punch holes)
@@ -104,12 +105,13 @@ async def generate_3d(request: Generate3DRequest):
     img_path = os.path.join("temp", request.image_id)
     mask_path = os.path.join("temp", request.mask_id)
     
-    out_path = pipeline.generate_3d_model(img_path, mask_path)
+    out_path, tripo_in_path = pipeline.generate_3d_model(img_path, mask_path)
     
-    # Return the URL path to the generated model
+    # Return the URL path to the generated model and input image
     model_url = f"http://localhost:8000/api/temp/{os.path.basename(out_path)}"
+    tripo_url = f"http://localhost:8000/api/temp/{os.path.basename(tripo_in_path)}"
     
-    return {"status": "success", "model_url": model_url}
+    return {"status": "success", "model_url": model_url, "tripo_url": tripo_url}
 
 @app.post("/api/smart_mask")
 async def smart_mask(request: SmartMaskRequest):
@@ -139,11 +141,18 @@ async def smart_mask(request: SmartMaskRequest):
     raw_add = request.add_strokes if request.add_strokes else ([request.points] if len(request.points) >= 3 else [])
     raw_sub = request.subtract_strokes
 
-    if not raw_add:
-        raise HTTPException(status_code=400, detail="Need at least one add stroke with >= 3 points")
+    if not raw_add and not request.base_mask_id:
+        raise HTTPException(status_code=400, detail="Need at least one add stroke or a base mask")
 
-    # Build combined polygon mask: union of all add strokes, then subtract
     poly_mask = np.zeros((H, W), dtype=np.uint8)
+
+    if request.base_mask_id:
+        base_mask_path = os.path.join("temp", request.base_mask_id)
+        if os.path.exists(base_mask_path):
+            base_mask = cv2.imread(base_mask_path, cv2.IMREAD_GRAYSCALE)
+            if base_mask is not None and base_mask.shape == (H, W):
+                poly_mask = base_mask
+
     for stroke in raw_add:
         if len(stroke) < 3:
             continue
@@ -206,6 +215,7 @@ async def smart_mask(request: SmartMaskRequest):
 
     return {
         "status":       "success",
+        "box":          [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
         # GrabCut-refined (default — snaps to edges)
         "mask_id":      gc_id,
         "mask_b64":     f"data:image/png;base64,{gc_b64}",

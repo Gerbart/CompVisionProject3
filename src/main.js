@@ -93,14 +93,16 @@ function selectObject(id) {
           .then(blob => {
             const url = URL.createObjectURL(blob);
             resizeSelCanvas();
-            showMaskOverlay(url);
-            URL.revokeObjectURL(url);
+            showMaskOverlay(url, true);
           })
           .catch(() => {}); // silently fail — overlay is cosmetic
       }
     }
+    // Update draw button text based on selection state
+    btnDrawSelect.innerText = '✏️ Edit Selection';
   } else {
     btnActionPrimary.disabled = true;
+    btnDrawSelect.innerText = '✏️ Draw Selection';
     // Clear the overlay when nothing is selected
     if (!drawMode) selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
   }
@@ -348,6 +350,12 @@ btnActionPrimary.addEventListener('click', async () => {
       const viewer = document.getElementById('result-3d-model');
       if (viewer) viewer.src = data.model_url;
 
+      const preview = document.getElementById('tripo-input-preview');
+      if (preview && data.tripo_url) {
+        preview.src = data.tripo_url;
+        preview.style.display = 'block';
+      }
+
       document.getElementById('final-state').classList.remove('hidden');
     } catch (err) {
       console.error(err);
@@ -518,6 +526,8 @@ let addStrokes     = [];        // committed ADD polygon strokes  [[{x,y,fx,fy}.
 let subtractStrokes = [];       // committed SUBTRACT polygon strokes
 let brushRadius    = 18;
 let smartMaskId    = null;
+let editingBaseMaskId = null;
+let baseMaskImg    = null;
 let smartGcData    = null;
 let smartPolyData  = null;
 
@@ -538,6 +548,25 @@ function animateAnts() {
 
 function redrawCanvas() {
   selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+
+  // If editing an existing mask, draw it first
+  if (baseMaskImg && editingBaseMaskId) {
+    const offscreen  = document.createElement('canvas');
+    offscreen.width  = selCanvas.width;
+    offscreen.height = selCanvas.height;
+    const offCtx = offscreen.getContext('2d');
+    offCtx.drawImage(baseMaskImg, 0, 0, selCanvas.width, selCanvas.height);
+    const imgData = offCtx.getImageData(0, 0, selCanvas.width, selCanvas.height);
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] > 128) {
+        d[i] = 16; d[i+1] = 185; d[i+2] = 129; d[i+3] = 140; // green tint
+      } else {
+        d[i+3] = 0; // transparent
+      }
+    }
+    selCtx.putImageData(imgData, 0, 0);
+  }
 
   // Draw all committed add strokes (green fill)
   for (const stroke of addStrokes) {
@@ -594,15 +623,26 @@ function enterDrawMode() {
   subtractStrokes = [];
   currentStroke = [];
   drawSubtract  = false;
-  smartMaskId   = null;
-  selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+  
+  editingBaseMaskId = state.selectedObjectId ? state.detectedObjects.find(o => o.id === state.selectedObjectId)?.mask_id : null;
+  smartMaskId   = editingBaseMaskId;
+
   selCanvas.classList.add('drawing');
-  btnDrawSelect.innerText = '✅ Confirm Selection';
+  btnDrawSelect.innerText = editingBaseMaskId ? '✅ Confirm Edits' : '✅ Confirm Selection';
   btnDrawSelect.classList.add('btn-primary');
   btnDrawSelect.classList.remove('btn-secondary');
   bboxContainer.style.pointerEvents = 'none';
   document.querySelectorAll('.bounding-box').forEach(b => b.style.pointerEvents = 'none');
-  selectObject(null);
+  
+  if (!editingBaseMaskId) {
+    selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+    baseMaskImg = null;
+  } else {
+    // Load the base mask to draw continuously during stroke rendering
+    baseMaskImg = new window.Image();
+    baseMaskImg.onload = () => redrawCanvas();
+    baseMaskImg.src = `${API_URL}/temp/${editingBaseMaskId}`;
+  }
   // Show/style the subtract toggle
   document.getElementById('btn-subtract-mode').style.display = 'inline-flex';
   document.getElementById('btn-subtract-mode').classList.remove('active-subtract');
@@ -610,7 +650,7 @@ function enterDrawMode() {
 }
 
 // ─── Helper: blit a b64 mask onto selCanvas as green tint ──────────────────
-function showMaskOverlay(maskB64) {
+function showMaskOverlay(maskB64, revokeUrl = false) {
   const maskImg = new window.Image();
   maskImg.onload = () => {
     const offscreen  = document.createElement('canvas');
@@ -629,6 +669,8 @@ function showMaskOverlay(maskB64) {
     }
     selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
     selCtx.putImageData(imgData, 0, 0);
+    
+    if (revokeUrl) URL.revokeObjectURL(maskB64);
   };
   maskImg.src = maskB64;
 }
@@ -639,7 +681,7 @@ async function confirmDrawMode() {
   bboxContainer.style.pointerEvents = '';
   document.getElementById('btn-subtract-mode').style.display = 'none';
 
-  if (addStrokes.length === 0 || !state.imageId) {
+  if (addStrokes.length === 0 && subtractStrokes.length === 0 && !editingBaseMaskId) {
     exitDrawMode();
     return;
   }
@@ -657,6 +699,7 @@ async function confirmDrawMode() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         image_id:        state.imageId,
+        base_mask_id:    editingBaseMaskId || undefined,
         add_strokes:     addPts,
         subtract_strokes: subPts,
         // Legacy single-stroke field (first add stroke) for backward compat

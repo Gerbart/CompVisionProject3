@@ -387,6 +387,12 @@ class CVProjectPipeline:
 
         # 3. Resize to 512x512 (TripoSR's standard conditioning size)
         image = square.resize((512, 512), Image.LANCZOS)
+        
+        # Save exact tripo input image for inspection
+        tripo_in_id = f"tripo_input_{uuid.uuid4().hex[:8]}.png"
+        tripo_in_path = os.path.join("temp", tripo_in_id)
+        image.save(tripo_in_path)
+        
         print("Generating mesh...")
         with torch.no_grad():
             codes  = model([image], device=dml)
@@ -412,7 +418,7 @@ class CVProjectPipeline:
         shutil.copyfile(temp_path, out_path)
 
         print("Saved -> " + out_path)
-        return temp_path
+        return temp_path, tripo_in_path
 
 
 pipeline = CVProjectPipeline()
