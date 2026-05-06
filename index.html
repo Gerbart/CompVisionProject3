@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Semantic Extractor - Pro Vision</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Background Effects -->
+      <div class="bg-shape shape-1"></div>
+      <div class="bg-shape shape-2"></div>
+
+      <header>
+        <div class="logo">
+          <span class="gradient-text">Shape</span>Shift
+        </div>
+        <nav>
+          <span>Computer Vision Proj 3</span>
+        </nav>
+      </header>
+
+      <main>
+        <!-- STEP 1: UPLOAD -->
+        <section id="step-upload" class="step-container active">
+          <div class="glass-card upload-card">
+            <h1>Turn 2D into <span class="gradient-text">3D</span></h1>
+            <p>Upload an image to start extracting obscured objects with context-aware AI.</p>
+            
+            <div class="drop-zone" id="drop-zone">
+              <div class="icon">📁</div>
+              <h3 id="upload-text">Drag & Drop Image</h3>
+              <p>or click to browse</p>
+              <input type="file" id="file-input" accept="image/*" hidden />
+            </div>
+          </div>
+        </section>
+
+        <!-- STEP 2 & 3: UNIFIED WORKSPACE -->
+        <section id="step-workspace" class="step-container workspace-layout">
+          
+          <!-- Left: Object List Sidebar -->
+          <div class="glass-card workspace-sidebar-left">
+             <h3>Detected Objects</h3>
+             <p class="text-sm">Select an object from the list to remove it.</p>
+             <div class="objects-column" id="objects-container">
+                <!-- Object cards go here -->
+             </div>
+          </div>
+
+          <!-- Center: Main Canvas Area -->
+          <div class="glass-card workspace-main">
+            <div class="workspace-header">
+              <h2 id="workspace-title">Step 1: <span class="gradient-text text-red">Remove Obscuring Objects</span></h2>
+              <p id="workspace-desc">Click an object on the left or click its bounding box here to select it.</p>
+            </div>
+
+            <div class="canvas-container" id="main-container">
+              <div class="workspace-wrapper" id="zoom-wrapper">
+                <img id="image-workspace" class="workspace-image" src="" alt="Workspace" />
+                <canvas id="selection-canvas"></canvas>
+                <div id="bbox-container"></div>
+              </div>
+            </div>
+
+            <div class="actions" style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+              <div style="display: flex; gap: 0.75rem; width: 100%; justify-content: space-between; align-items:center;">
+                <div style="display:flex; gap:0.5rem;">
+                  <button class="btn btn-ghost" id="btn-start-over">← Back</button>
+                  <button id="btn-draw-select" class="btn btn-secondary" title="Draw a custom selection to mark an area for removal">✏️ Draw Selection</button>
+                  <button id="btn-action-primary" class="btn btn-primary" disabled>Remove Selected Object</button>
+                </div>
+              </div>
+              <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--text-muted);">
+                <input type="checkbox" id="checkbox-use-ai">
+                Use Advanced AI Removal (Slower)
+              </label>
+              <label id="label-pure-selection" style="cursor: pointer; display: none; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--text-muted);">
+                <input type="checkbox" id="checkbox-pure-selection">
+                Pure Selection (exact polygon, no edge-snapping)
+              </label>
+            </div>
+          </div>
+
+          <!-- Right: Action Sidebar -->
+          <div class="glass-card workspace-sidebar-right">
+            
+            <!-- Removal Context -->
+            <div id="sidebar-removal" class="sidebar-context active">
+              <h3>Generated Options</h3>
+              <p class="text-sm">Click an image below to replace the workspace image with this AI removal result.</p>
+              
+              <div id="loading-removal" class="hidden">
+                <div class="loader"></div>
+                <p>Generating Options...</p>
+              </div>
+
+              <div class="options-column" id="options-container">
+                 <div class="empty-state">No options generated yet. Select an object and click "Remove".</div>
+              </div>
+
+              <hr>
+              <button id="btn-done-removal" class="btn btn-secondary w-full">Done Removing Objects</button>
+            </div>
+
+            <!-- 3D Context -->
+            <div id="sidebar-3d" class="sidebar-context hidden">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <h3 style="margin:0;">3D Generation</h3>
+                <button id="btn-back-to-removal" class="btn btn-ghost" style="font-size:0.85rem;">← Back to Removal</button>
+              </div>
+              <p class="text-sm">Select the main object on the canvas, then generate the 3D model.</p>
+              
+              <div id="loading-3d" class="hidden">
+                <br>
+                <div class="loader"></div>
+                <p>Running Shap-E...</p>
+              </div>
+
+              <div id="final-state" class="final-container hidden">
+                <br>
+                <div class="model-viewer-container">
+                  <model-viewer id="result-3d-model" src="" camera-controls auto-rotate 
+                                style="width: 100%; height: 300px; background-color: rgba(0,0,0,0.3); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                  </model-viewer>
+                </div>
+                <br>
+                <button id="btn-export-3d" class="btn btn-secondary w-full">Export .GLB</button>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+torch
+torchvision
+diffusers
+accelerate
+Pillow
+numpy
+opencv-python
+# shap-e needs to be installed from source: pip install git+https://github.com/openai/shap-e.git

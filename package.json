@@ -1,0 +1,15 @@
+{
+  "name": "computer-vision-project-3",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"cd backend && ..\\dml_env\\Scripts\\python.exe main.py\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "vite": "^8.0.10"
+  }
+}
