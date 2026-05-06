@@ -215,7 +215,7 @@ async def smart_mask(request: SmartMaskRequest):
 
     return {
         "status":       "success",
-        "box":          [int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min)],
+        "box":          [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
         # GrabCut-refined (default — snaps to edges)
         "mask_id":      gc_id,
         "mask_b64":     f"data:image/png;base64,{gc_b64}",
