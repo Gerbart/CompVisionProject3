@@ -414,9 +414,7 @@ document.getElementById('btn-done-removal').addEventListener('click', () => {
   document.getElementById('sidebar-3d').classList.add('active');
 
   document.getElementById('workspace-title').innerHTML =
-    `Step 2: <span class="gradient-text text-green">Select Target Object</span>`;
-  document.getElementById('workspace-desc').innerText =
-    'Select the object you want to convert into a 3D model.';
+    `<span class="gradient-text text-green">Select Target Object</span>`;
   btnActionPrimary.innerText  = 'Generate 3D Model';
   btnActionPrimary.disabled   = false;
 });
