@@ -730,13 +730,13 @@ async function confirmDrawMode() {
     if (data.status !== 'success') throw new Error(data.detail || 'Backend error');
 
     smartGcData   = { mask_id: data.mask_id,      mask_b64: data.mask_b64 };
-    smartPolyData = { mask_id: data.poly_mask_id, mask_b64: data.poly_mask_b64 };
+    smartGcData   = { mask_id: data.mask_id, mask_b64: data.mask_b64 };
+    smartPolyData = smartGcData;  // identical — no GrabCut or separate poly variant
 
-    const usePure = document.getElementById('checkbox-pure-selection').checked;
-    const active  = usePure ? smartPolyData : smartGcData;
-    smartMaskId   = active.mask_id;
-    showMaskOverlay(active.mask_b64);
-    document.getElementById('label-pure-selection').style.display = 'flex';
+    smartMaskId = data.mask_id;
+    showMaskOverlay(data.mask_b64);
+    // Hide the now-redundant Pure Selection toggle
+    document.getElementById('label-pure-selection').style.display = 'none';
 
     // Update the object being edited in place, or add a new custom selection
     const editingObjId = editingBaseMaskId ? state.selectedObjectId : 'smart-sel';

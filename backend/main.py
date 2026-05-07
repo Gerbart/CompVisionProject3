@@ -116,9 +116,10 @@ async def generate_3d(request: Generate3DRequest):
 @app.post("/api/smart_mask")
 async def smart_mask(request: SmartMaskRequest):
     """
-    Takes a list of stroke points (as image fractions 0..1) drawn by the user,
-    paints them onto the image coordinate space, then runs GrabCut (RECT mode)
-    to snap to real object edges. Returns a mask_id for use with /api/inpaint.
+    Paints user-drawn strokes directly onto a mask — no GrabCut, no dilation.
+    Add strokes fill pixels white; subtract strokes punch holes (black).
+    If base_mask_id is supplied the existing mask is used as the starting point.
+    Returns the exact pixel mask the user drew.
     """
     img_path = os.path.join("temp", request.image_id)
     if not os.path.exists(img_path):
@@ -137,29 +138,29 @@ async def smart_mask(request: SmartMaskRequest):
             dtype=np.int32
         )
 
-    # Collect all ADD strokes (prefer add_strokes; fall back to legacy points)
     raw_add = request.add_strokes if request.add_strokes else ([request.points] if len(request.points) >= 3 else [])
     raw_sub = request.subtract_strokes
 
     if not raw_add and not request.base_mask_id:
         raise HTTPException(status_code=400, detail="Need at least one add stroke or a base mask")
 
+    # Start from the existing mask (for edits) or a blank canvas
     poly_mask = np.zeros((H, W), dtype=np.uint8)
-
     if request.base_mask_id:
         base_mask_path = os.path.join("temp", request.base_mask_id)
         if os.path.exists(base_mask_path):
             base_mask = cv2.imread(base_mask_path, cv2.IMREAD_GRAYSCALE)
             if base_mask is not None and base_mask.shape == (H, W):
-                poly_mask = base_mask
+                poly_mask = base_mask.copy()
 
+    # Paint add strokes (union)
     for stroke in raw_add:
         if len(stroke) < 3:
             continue
         px = frac_stroke_to_pixels(stroke)
         cv2.fillPoly(poly_mask, [px.reshape(-1, 1, 2)], 255)
 
-    # Subtract strokes (punch holes)
+    # Paint subtract strokes (punch holes)
     for stroke in raw_sub:
         if len(stroke) < 3:
             continue
@@ -168,60 +169,28 @@ async def smart_mask(request: SmartMaskRequest):
 
     ys, xs = np.where(poly_mask > 0)
     if len(ys) == 0:
-        raise HTTPException(status_code=400, detail="Selection area is empty")
+        raise HTTPException(status_code=400, detail="Selection area is empty after all strokes")
 
-    # Bounding rect for GrabCut (with generous padding)
-    pad = max(20, min(W, H) // 12)
-    x1  = max(0,     int(xs.min()) - pad)
-    y1  = max(0,     int(ys.min()) - pad)
-    x2  = min(W - 1, int(xs.max()) + pad)
-    y2  = min(H - 1, int(ys.max()) + pad)
-    rw, rh = x2 - x1, y2 - y1
+    # Bounding box of the non-zero region (no padding — exact pixels only)
+    x1, y1 = int(xs.min()), int(ys.min())
+    x2, y2 = int(xs.max()), int(ys.max())
 
-    final_mask = poly_mask.copy()  # default: exactly what the user drew
-
-    if rw >= 8 and rh >= 8:
-        # Run GrabCut with RECT mode to snap to real object edges
-        gc_mask = np.zeros((H, W), dtype=np.uint8)
-        bgd     = np.zeros((1, 65), np.float64)
-        fgd     = np.zeros((1, 65), np.float64)
-        try:
-            cv2.grabCut(img, gc_mask, (x1, y1, rw, rh), bgd, fgd, 5, cv2.GC_INIT_WITH_RECT)
-            gc_fg = np.where(
-                (gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0
-            ).astype(np.uint8)
-
-            # Only keep GrabCut pixels that overlap the user's drawn polygon
-            refined = cv2.bitwise_and(gc_fg, poly_mask)
-            if np.count_nonzero(refined) > 0.1 * np.count_nonzero(poly_mask):
-                final_mask = refined
-        except cv2.error:
-            pass  # fall back to the raw polygon mask
-
-    # Save raw polygon mask (pure selection)
-    dilate_k   = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    poly_final = cv2.dilate(poly_mask, dilate_k)
-    poly_id    = f"smart_poly_{uuid.uuid4().hex[:8]}.png"
-    cv2.imwrite(os.path.join("temp", poly_id), poly_final)
-    _, pbuf = cv2.imencode('.png', poly_final)
-    poly_b64 = base64.b64encode(pbuf).decode('utf-8')
-
-    # Save GrabCut-refined mask
-    final_mask = cv2.dilate(final_mask, dilate_k)
-    gc_id      = f"smart_gc_{uuid.uuid4().hex[:8]}.png"
-    cv2.imwrite(os.path.join("temp", gc_id), final_mask)
-    _, gbuf = cv2.imencode('.png', final_mask)
-    gc_b64  = base64.b64encode(gbuf).decode('utf-8')
+    # Save the mask — same file served as both "gc" and "poly" (they're identical here)
+    mask_id = f"smart_{uuid.uuid4().hex[:8]}.png"
+    cv2.imwrite(os.path.join("temp", mask_id), poly_mask)
+    _, mbuf  = cv2.imencode('.png', poly_mask)
+    mask_b64 = base64.b64encode(mbuf).decode('utf-8')
+    mask_b64_uri = f"data:image/png;base64,{mask_b64}"
 
     return {
-        "status":       "success",
-        "box":          [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
-        # GrabCut-refined (default — snaps to edges)
-        "mask_id":      gc_id,
-        "mask_b64":     f"data:image/png;base64,{gc_b64}",
-        # Raw polygon (pure selection — exactly what user drew)
-        "poly_mask_id": poly_id,
-        "poly_mask_b64": f"data:image/png;base64,{poly_b64}",
+        "status":        "success",
+        "box":           [x1, y1, x2 - x1, y2 - y1],
+        # GrabCut-refined field (now identical to raw — no GrabCut)
+        "mask_id":       mask_id,
+        "mask_b64":      mask_b64_uri,
+        # Raw polygon field
+        "poly_mask_id":  mask_id,
+        "poly_mask_b64": mask_b64_uri,
     }
 
 if __name__ == "__main__":
