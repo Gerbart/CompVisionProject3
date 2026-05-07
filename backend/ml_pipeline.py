@@ -412,8 +412,11 @@ class CVProjectPipeline:
         # TripoSR expects a square RGB image (512x512, clean solid background).
         rgba_img = Image.open(proc_path).convert("RGBA")
 
-        # 1. TripoSR natively handles images. Retain RGBA transparency (invisible background).
-        composed = rgba_img
+        # 1. TripoSR conditioning expects a 3-channel RGB image.
+        # Its internal logic blends the RGBA foreground onto a 50% gray background (0.5).
+        # We replicate that here to prevent tensor dimension errors and malformed geometry.
+        gray_bg = Image.new("RGBA", rgba_img.size, (127, 127, 127, 255))
+        composed = Image.alpha_composite(gray_bg, rgba_img).convert("RGB")
         
         # 2. Pad to square (letterbox) so the object isn't distorted
         W_img, H_img = composed.size
@@ -421,7 +424,7 @@ class CVProjectPipeline:
         # Add 20% margin so objects don't hit the image border
         margin = max(24, int(side * 0.20))
         side  += margin * 2
-        square = Image.new("RGBA", (side, side), (0, 0, 0, 0)) # Transparent background
+        square = Image.new("RGB", (side, side), (127, 127, 127)) # Gray background
         square.paste(composed, ((side - W_img) // 2, (side - H_img) // 2))
 
         # 3. Resize to 512x512 (TripoSR's standard conditioning size)
