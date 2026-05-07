@@ -729,13 +729,11 @@ async function confirmDrawMode() {
 
     if (data.status !== 'success') throw new Error(data.detail || 'Backend error');
 
-    smartGcData   = { mask_id: data.mask_id,      mask_b64: data.mask_b64 };
     smartGcData   = { mask_id: data.mask_id, mask_b64: data.mask_b64 };
-    smartPolyData = smartGcData;  // identical — no GrabCut or separate poly variant
+    smartPolyData = smartGcData;  // identical — no GrabCut
 
     smartMaskId = data.mask_id;
     showMaskOverlay(data.mask_b64);
-    // Hide the now-redundant Pure Selection toggle
     document.getElementById('label-pure-selection').style.display = 'none';
 
     // Update the object being edited in place, or add a new custom selection
@@ -745,8 +743,8 @@ async function confirmDrawMode() {
       id:         editingObjId,
       label:      existIdx >= 0 ? state.detectedObjects[existIdx].label : 'Custom Selection',
       box:        data.box || (existIdx >= 0 ? state.detectedObjects[existIdx].box : [0, 0, 1, 1]),
-      mask_id:    active.mask_id,
-      cutout_b64: active.mask_b64,
+      mask_id:    data.mask_id,
+      cutout_b64: data.mask_b64,
     };
 
     if (existIdx >= 0) state.detectedObjects[existIdx] = updatedObj;
