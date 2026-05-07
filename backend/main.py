@@ -42,6 +42,11 @@ class Generate3DRequest(BaseModel):
     image_id: str
     mask_id: str
 
+class GenerateRequest(BaseModel):
+    image_id: str
+    mask_id: str
+    prompt: str
+
 class SmartMaskRequest(BaseModel):
     image_id: str
     base_mask_id: Optional[str] = None
@@ -112,6 +117,17 @@ async def generate_3d(request: Generate3DRequest):
     tripo_url = f"http://localhost:8000/api/temp/{os.path.basename(tripo_in_path)}"
     
     return {"status": "success", "model_url": model_url, "tripo_url": tripo_url}
+
+@app.post("/api/generate")
+async def generate_fill(request: GenerateRequest):
+    img_path  = os.path.join("temp", request.image_id)
+    mask_path = os.path.join("temp", request.mask_id)
+    if not os.path.exists(img_path) or not os.path.exists(mask_path):
+        raise HTTPException(status_code=404, detail="Image or mask not found")
+    out_path = pipeline.generate_over_mask(img_path, mask_path, request.prompt)
+    with open(out_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode('utf-8')
+    return {"status": "success", "result_b64": f"data:image/png;base64,{b64}", "image_id": os.path.basename(out_path)}
 
 @app.post("/api/smart_mask")
 async def smart_mask(request: SmartMaskRequest):

@@ -72,6 +72,7 @@
                   <button class="btn btn-ghost" id="btn-start-over">← Back</button>
                   <button id="btn-draw-select" class="btn btn-secondary" title="Draw a custom selection to mark an area for removal">✏️ Draw Selection</button>
                   <button id="btn-action-primary" class="btn btn-primary" disabled>Remove Selected Object</button>
+                  <button id="btn-generate-fill" class="btn btn-secondary" disabled title="AI generate over the selected area with a custom prompt">✨ Generate Fill</button>
                 </div>
               </div>
               <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--text-muted);">
@@ -82,6 +83,14 @@
                 <input type="checkbox" id="checkbox-pure-selection">
                 Pure Selection (exact polygon, no edge-snapping)
               </label>
+              <!-- Generate Fill prompt row (shown when Generate Fill is clicked) -->
+              <div id="generate-prompt-row" style="display:none; width:100%; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                <input id="generate-prompt-input" type="text" placeholder="Describe what to generate here…"
+                  style="flex:1; min-width:180px; padding:0.5rem 0.75rem; border-radius:8px; border:1px solid var(--glass-border);
+                         background:rgba(0,0,0,0.3); color:var(--text-main); font-family:inherit; font-size:0.9rem;">
+                <button id="btn-generate-confirm" class="btn btn-primary" style="white-space:nowrap;">✨ Run</button>
+                <button id="btn-generate-cancel"  class="btn btn-ghost"   style="white-space:nowrap;">✕</button>
+              </div>
             </div>
           </div>
 

@@ -103,8 +103,10 @@ function selectObject(id) {
     }
 
     btnDrawSelect.innerText = '✏️ Edit Selection';
+    document.getElementById('btn-generate-fill').disabled = false;
   } else {
     btnActionPrimary.disabled = true;
+    document.getElementById('btn-generate-fill').disabled = true;
     btnDrawSelect.innerText = '✏️ Draw Selection';
     if (!drawMode) {
       baseMaskImg = null;
@@ -882,3 +884,72 @@ selCanvas.addEventListener('contextmenu', (e) => {
 });
 
 // Scroll on the canvas zooms normally — no stopPropagation.
+
+// ─────────────────────────────────────────────────────────
+//  Generate Fill
+// ─────────────────────────────────────────────────────────
+const btnGenerateFill    = document.getElementById('btn-generate-fill');
+const generatePromptRow  = document.getElementById('generate-prompt-row');
+const generatePromptInput = document.getElementById('generate-prompt-input');
+const btnGenerateConfirm = document.getElementById('btn-generate-confirm');
+const btnGenerateCancel  = document.getElementById('btn-generate-cancel');
+
+btnGenerateFill.addEventListener('click', () => {
+  generatePromptRow.style.display = 'flex';
+  generatePromptInput.focus();
+});
+
+btnGenerateCancel.addEventListener('click', () => {
+  generatePromptRow.style.display = 'none';
+  generatePromptInput.value = '';
+});
+
+btnGenerateConfirm.addEventListener('click', async () => {
+  const prompt = generatePromptInput.value.trim();
+  if (!prompt) { generatePromptInput.focus(); return; }
+
+  const selectedObj = state.detectedObjects.find(o => o.id === state.selectedObjectId);
+  if (!selectedObj?.mask_id || !state.imageId) {
+    alert('Select an object first, then use Generate Fill.');
+    return;
+  }
+
+  btnGenerateConfirm.disabled = true;
+  btnGenerateConfirm.innerText = '⏳ Generating…';
+  selCtx.clearRect(0, 0, selCanvas.width, selCanvas.height);
+
+  try {
+    const data = await fetch(`${API_URL}/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_id: state.imageId,
+        mask_id:  selectedObj.mask_id,
+        prompt:   prompt,
+      })
+    }).then(r => r.json());
+
+    if (data.status !== 'success') throw new Error(data.detail || 'Generate failed');
+
+    // Commit result as the new workspace image
+    commitImage(data.result_b64);
+
+    // Upload to backend so subsequent operations use the new image
+    const blobRes  = await fetch(data.result_b64);
+    const blob     = await blobRes.blob();
+    const file     = new File([blob], 'generated.png', { type: 'image/png' });
+    const formData = new FormData();
+    formData.append('file', file);
+    const uploadData = await fetch(`${API_URL}/upload`, { method: 'POST', body: formData }).then(r => r.json());
+    state.imageId = uploadData.image_id;
+
+    generatePromptRow.style.display = 'none';
+    generatePromptInput.value = '';
+  } catch (err) {
+    console.error(err);
+    alert('Generate failed: ' + (err.message || err));
+  }
+
+  btnGenerateConfirm.disabled = false;
+  btnGenerateConfirm.innerText = '✨ Run';
+});

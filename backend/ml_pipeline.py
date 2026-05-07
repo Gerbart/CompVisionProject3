@@ -160,17 +160,9 @@ class CVProjectPipeline:
         if use_ai:
             try:
                 ai_cv = self._ai_remove(img, mask_dilated)
-                paths = []
-                # Return AI result first, then two OpenCV variants for comparison
                 p = os.path.join("temp", f"ai_{uuid.uuid4().hex[:8]}.png")
                 cv2.imwrite(p, ai_cv)
-                paths.append(p)
-                for r in [cv2.inpaint(img, mask_dilated, 5, cv2.INPAINT_NS),
-                           cv2.inpaint(img, mask_dilated, 10, cv2.INPAINT_TELEA)]:
-                    p = os.path.join("temp", f"inpainted_{uuid.uuid4().hex[:8]}.png")
-                    cv2.imwrite(p, r)
-                    paths.append(p)
-                return paths
+                return [p]   # Only the AI result — it's always the best option
             except Exception as e:
                 print(f"AI inpainting failed: {e} -- falling back to OpenCV.")
 
@@ -238,8 +230,8 @@ class CVProjectPipeline:
                 negative_prompt = neg_prompt,
                 image           = h512,
                 mask_image      = m512,
-                strength        = 0.30,   # conservative: SD barely changes the hint
-                guidance_scale  = 5.0,    # low: less creative, fewer hallucinations
+                strength        = 0.30,
+                guidance_scale  = 5.0,
                 num_inference_steps = 25,
             ).images[0]
 
@@ -247,19 +239,12 @@ class CVProjectPipeline:
         result_pil = out.resize((W, H), Image.LANCZOS)
         result_cv  = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
 
-        # ----- Poisson blending: seamlessly fuse result into original -----
-        ys, xs = np.where(mask_cv > 0)
-        if len(ys) > 0:
-            cx = int((int(xs.min()) + int(xs.max())) / 2)
-            cy = int((int(ys.min()) + int(ys.max())) / 2)
-            try:
-                result_cv = cv2.seamlessClone(
-                    result_cv, img_cv, mask_cv, (cx, cy), cv2.NORMAL_CLONE
-                )
-            except cv2.error:
-                pass  # if Poisson fails, just return the raw SD output
+        # Composite: only replace pixels inside the mask (no seamlessClone bleed)
+        mask_bool = mask_cv > 0
+        output = img_cv.copy()
+        output[mask_bool] = result_cv[mask_bool]
 
-        return result_cv
+        return output
 
     def _bg_context_prompt(self, img_cv: np.ndarray, mask_cv: np.ndarray) -> str:
         """
@@ -296,6 +281,61 @@ class CVProjectPipeline:
         if brightness > 60:
             return "dark wood surface, empty dark wooden floor, seamless dark wood"
         return "dark surface, empty dark background, seamless dark floor"
+
+    # ------------------------------------------------------------------ #
+    #  Generative Fill                                                     #
+    # ------------------------------------------------------------------ #
+    def generate_over_mask(self, image_path: str, mask_path: str, prompt: str) -> str:
+        """
+        Run SD inpainting at high strength over the masked region with a
+        user-supplied prompt. Returns path to the generated image.
+        """
+        import torch
+        from diffusers import StableDiffusionInpaintPipeline
+
+        img_cv  = cv2.imread(image_path)
+        mask_cv = cv2.imread(mask_path, 0)
+        H, W    = img_cv.shape[:2]
+
+        # Load / cache the same SD pipeline used by AI removal
+        if not hasattr(self, '_sd_pipe') or self._sd_pipe is None:
+            print("Loading SD Inpainting model (first load)...")
+            self._sd_pipe = StableDiffusionInpaintPipeline.from_pretrained(
+                "runwayml/stable-diffusion-inpainting",
+                torch_dtype=torch.float32,
+                safety_checker=None,
+            ).to("cpu")
+            self._sd_pipe.set_progress_bar_config(disable=True)
+            print("SD model ready.")
+
+        img_pil  = Image.fromarray(cv2.cvtColor(img_cv,  cv2.COLOR_BGR2RGB))
+        mask_pil = Image.fromarray(mask_cv).convert("L")
+        i512 = img_pil.resize((512, 512),  Image.LANCZOS)
+        m512 = mask_pil.resize((512, 512), Image.NEAREST)
+
+        print(f"Generating over mask: prompt='{prompt}'")
+        with torch.no_grad():
+            out = self._sd_pipe(
+                prompt              = prompt,
+                negative_prompt     = "blurry, low quality, artifacts, distorted",
+                image               = i512,
+                mask_image          = m512,
+                strength            = 0.90,   # high: generate new content freely
+                guidance_scale      = 7.5,
+                num_inference_steps = 30,
+            ).images[0]
+
+        result_pil = out.resize((W, H), Image.LANCZOS)
+        result_cv  = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
+
+        # Composite: only replace pixels inside the mask
+        mask_bool = mask_cv > 0
+        output    = img_cv.copy()
+        output[mask_bool] = result_cv[mask_bool]
+
+        out_path = os.path.join("temp", f"generated_{uuid.uuid4().hex[:8]}.png")
+        cv2.imwrite(out_path, output)
+        return out_path
 
     # ------------------------------------------------------------------ #
     #  Stage 3: 3D Generation via TripoSR + DirectML                      #
